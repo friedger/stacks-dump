@@ -827,7 +827,9 @@ function process_burnchain_ops() {
         miner_key
       )} ${burnPerWinFormat
         .format(miner.burn_per_win)
-        .padStart(14, " ")} ${profitFormat
+        .padStart(14, " ")} ${miner.mined
+        .toString()
+        .padStart(6, " ")} ${profitFormat
         .format(miner.profit)
         .padStart(14, " ")}`
     );
