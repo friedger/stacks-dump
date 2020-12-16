@@ -340,11 +340,14 @@ for (let j = 0; j < my_args.length; j++) {
 }
 // console.log('data root path: ', data_root_path)
 
-const burnchain_db_path = `burnchain/db/bitcoin/${target === 'xenon' ? 'testnet' : 'regtest'}/burnchain.db`
-const sortition_db_path = `burnchain/db/bitcoin/${target === 'xenon' ? 'testnet' : 'regtest'}/sortition.db/marf`
-const vm_db_path = "chainstate/chain-00000080-testnet/vm/index"
-const staging_db_path = 'chainstate/chain-00000080-testnet/blocks/staging.db'
-
+const burnchain_db_path = `burnchain/db/bitcoin/${
+  target === "xenon" ? "testnet" : "regtest"
+}/burnchain.db`;
+const sortition_db_path = `burnchain/db/bitcoin/${
+  target === "xenon" ? "testnet" : "regtest"
+}/sortition.db/marf`;
+const vm_db_path = "chainstate/chain-00000080-testnet/vm/index";
+const staging_db_path = "chainstate/chain-00000080-testnet/vm/index";
 
 const burnchain_db = new Database(`${data_root_path}/${burnchain_db_path}`, {
   readonly: true,
