@@ -44,18 +44,70 @@ const truck = () => {
 
 import sha512 from 'js-sha512'
 import Database from 'better-sqlite3'
-import stacks_transactions from '@blockstack/stacks-transactions'
-const { getAddressFromPublicKey, TransactionVersion } = stacks_transactions
+import { getAddressFromPublicKey, TransactionVersion } from '@blockstack/stacks-transactions'
 import secp256k1 from 'secp256k1'
 import c32 from 'c32check'
 import bitcoin from 'bitcoinjs-lib'
+import csv from 'csv-parser'
+import fs from 'fs'
 
+const burn_samples = {};
+const burn_sample_total_by_blocks = {}
+
+function process_smoothing_logs() {
+    return new Promise((resolve, reject) => {
+    fs.createReadStream('/home/friedger/_repos/github/friedger/pub-stacks-dump/bot/dump3.csv')
+    .pipe(csv())
+    .on("data", (data) => {
+      data = Object.values(data)
+      const sender = data[3].split(",")[1].substr(23)
+      const parts = data[4].split(",")
+      const block_height = parts[1].split(":")[1].trim()
+      const recent_commit = parseInt(parts[2].split(":")[1].trim())
+      const median_burn =  parseInt(parts[3].split(":")[1].trim())
+      const miner_key = getAddressFromPublicKey(sender, TransactionVersion.Mainnet)
+      
+      if (!burn_samples[block_height]) {
+        burn_samples[block_height]= {}
+      }
+      burn_samples[block_height][miner_key] = {sender, median_burn, block_height, recent_commit}
+     
+      if (!burn_sample_total_by_blocks[block_height]) {
+        burn_sample_total_by_blocks[block_height] = 0
+      }
+      burn_sample_total_by_blocks[block_height] += Math.min(median_burn, recent_commit)
+    }).on("end", () => {
+      resolve()
+    })
+  })
+}
+
+function probabilityToWin(miner_key, block_height) {
+  if (burn_samples[block_height] && burn_samples[block_height][miner_key]) {
+    return burn_samples[block_height][miner_key].median_burn/burn_sample_total_by_blocks[block_height]
+  } else {
+    return 0
+  }
+}
+
+function pad(pad, str, padLeft) {
+  if (typeof str === 'undefined') 
+    return pad;
+  if (padLeft) {
+    return (pad + str).slice(-pad.length);
+  } else {
+    return (str + pad).substring(0, pad.length);
+  }
+}
 
 function numberWithCommas(x, decimals) {
-  return x.toFixed(decimals).replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+  return pad("              ", x.toFixed(decimals).replace(/\B(?=(\d{3})+(?!\d))/g, ","), true)
 }
 
 function adjustSpace(miner_key) {
+  if (miner_key.length + c32.c32ToB58(miner_key).length === 73) {
+    return '  '
+  }
   if (miner_key.length + c32.c32ToB58(miner_key).length === 74) {
     return ' '
   }
@@ -717,6 +769,14 @@ function post_process_miner_stats() {
             miner.distance_sum += block_commit.block_height - block_commit.parent_block_ptr
             miner.distance_count++            
           }
+                 
+          if (block.payments.length > 0) {
+            if (!miner.expected_rewards) {
+              miner.expected_rewards = 0
+            }
+            miner.expected_rewards += probabilityToWin(block_commit.leader_key_address, block.block_height) * block.payments[0].coinbase
+          }                  
+
           if (block_commit.txid === block.winning_block_txid) {
             miner.won++
             win_total++
@@ -947,7 +1007,7 @@ function process_burnchain_ops() {
     if (op.LeaderBlockCommit && op.LeaderBlockCommit.apparent_sender) {
       op.LeaderBlockCommit.burn_header_hash_hex = Buffer.from(op.LeaderBlockCommit.burn_header_hash).toString('hex')
       op.LeaderBlockCommit.public_key = secp256k1.publicKeyConvert(Buffer.from(op.LeaderBlockCommit.apparent_sender.public_keys[0].key, 'hex'), op.LeaderBlockCommit.apparent_sender.public_keys[0].compressed).toString('hex')
-      op.LeaderBlockCommit.stacks_address = getAddressFromPublicKey(op.LeaderBlockCommit.public_key, TransactionVersion.Testnet)
+      op.LeaderBlockCommit.stacks_address = getAddressFromPublicKey(op.LeaderBlockCommit.public_key, TransactionVersion.Mainnet)
       op.LeaderBlockCommit.btc_address = c32.c32ToB58(op.LeaderBlockCommit.stacks_address)
     } else if (op.LeaderKeyRegister) {
       op.LeaderKeyRegister.stacks_address = c32.c32address(op.LeaderKeyRegister.address.version, op.LeaderKeyRegister.address.bytes)
@@ -963,6 +1023,8 @@ function process_burnchain_ops() {
 
 
 (async () => {
+  await process_smoothing_logs()
+
   process_burnchain_blocks()
   process_burnchain_ops()
   // process.exit()
@@ -1044,6 +1106,11 @@ function process_burnchain_ops() {
     block.block_commits.forEach(bc => {
       miners[bc.leader_key_address].last_block = block.block_height
       miners[bc.leader_key_address].last_commit = bc.burn_fee
+      const burnSample = burn_samples[block.block_height] ? burn_samples[block.block_height][bc.leader_key_address] : undefined
+      if (burnSample) {
+        const coinbase = block.payments.length > 0 ? block.payments[0].coinbase : 2460000000
+        miners[bc.leader_key_address].expected_rewards += burnSample.median_burn / burn_sample_total_by_blocks[block.block_height]  * coinbase
+      }
     })
 
     
@@ -1152,12 +1219,12 @@ function process_burnchain_ops() {
     if (use_alpha) {
       for (let miner_key of Object.keys(miners).sort()) {
         const miner = miners[miner_key]
-        console.log(`${miner_key}/${c32.c32ToB58(miner_key)} ${miner.actual_win}/${miner.won}/${miner.mined} ${(miner.actual_win / actual_win_total * 100).toFixed(2)}% ${(miner.won / miner.mined * 100).toFixed(2)}% - ${numberWithCommas(miner.burned, 0)} - Th[${(miner.burned / miner.total_burn * 100).toFixed(2)}%] (${miner.burned / miner.mined} - ${miner.last_commit}) => ${numberWithCommas(miner.rewards / 1000000, 2)}`)
+        console.log(`${miner_key}/${c32.c32ToB58(miner_key)} ${numberWithCommas(miner.rewards / 1000000, 2)} ${numberWithCommas(miner.expected_rewards / 1000000, 2)} ${miner.actual_win}/${miner.won}/${miner.mined} ${(miner.actual_win / actual_win_total * 100).toFixed(2)}% ${(miner.won / miner.mined * 100).toFixed(2)}% - ${numberWithCommas(miner.burned, 0)} - Th[${(miner.burned / miner.total_burn * 100).toFixed(2)}%] (${miner.burned / miner.mined} - ${miner.last_commit}) => ${numberWithCommas(miner.rewards / 1000000, 2)} ${numberWithCommas(miner.expected_rewards / 1000000, 2)}`)
       }      
     } else {
-      for (let miner_key of Object.keys(miners).sort((a, b) => (miners[b].last_commit - miners[a].last_commit))) {
+      for (let miner_key of Object.keys(miners).sort((a, b) => (miners[b].expected_rewards - miners[a].expected_rewards))) {
         const miner = miners[miner_key]
-        console.log(`${last_block - miner.last_block < 4 ? '$' : ' '} ${miner_key}/${c32.c32ToB58(miner_key)} ${adjustSpace(miner_key)} ${miner.actual_win}/${miner.won}/${miner.mined} ${(miner.actual_win / miner.mined * 100).toFixed(2)}% ${(miner.won / miner.mined * 100).toFixed(2)}% - ${numberWithCommas(miner.burned, 0)} - Th[${(miner.burned / miner.total_burn * 100).toFixed(2)}%] (${miner.burned / miner.mined} - ${miner.last_commit}) => ${numberWithCommas(miner.rewards / 1000000, 2)}`)
+        console.log(`${last_block - miner.last_block < 4 ? '$' : ' '} ${miner_key}/${c32.c32ToB58(miner_key)} ${adjustSpace(miner_key)} ${numberWithCommas(miner.rewards / 1000000, 2)} ${numberWithCommas(miner.expected_rewards / 1000000, 2)}  ${miner.actual_win}/${miner.won}/${miner.mined} ${(miner.actual_win / miner.mined * 100).toFixed(2)}% ${(miner.won / miner.mined * 100).toFixed(2)}% - ${numberWithCommas(miner.burned, 0)} - Th[${(miner.burned / miner.total_burn * 100).toFixed(2)}%] (${miner.burned / miner.mined} - ${miner.last_commit}) => ${numberWithCommas(miner.rewards / 1000000, 2)} ${numberWithCommas(miner.expected_rewards / 1000000, 2)}`)
       }
     }
 
