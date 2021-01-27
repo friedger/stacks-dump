@@ -378,6 +378,7 @@ const root = ''
 let target = 'mainnet'
 let use_txs = false
 let use_csv = false
+let use_json = false
 let use_alpha = false
 let show_nodes = false
 let show_paths = false
@@ -401,6 +402,10 @@ for (let j = 0; j < my_args.length; j++) {
     case '--csv':
       use_csv = true
       break
+    case '-j':
+    case '--json':
+      use_json = true
+    break
     case '-d':
     case '--distances':
       show_distances = true
@@ -691,7 +696,7 @@ function process_snapshots() {
 
   for (let row of result) {
     if (row.pox_valid === 0) {
-      !use_csv && console.log("pox invalid", row.block_height, row.burn_header_hash, parent && parent.parent_burn_header_hash)
+      !use_csv && !use_json  && console.log("pox invalid", row.block_height, row.burn_header_hash, parent && parent.parent_burn_header_hash)
     } else if (!parent || row.burn_header_hash === parent.parent_burn_header_hash) {
       burn_blocks_by_height[row.block_height] = row
       burn_blocks_by_burn_header_hash[row.burn_header_hash] = row
@@ -876,7 +881,7 @@ function process_burnchain_blocks() {
 function process_burnchain_ops() {
   const result = stmt_all_burnchain_ops.all()
   // console.log("process_burnchain_ops", result)
-  if (!use_csv && show_registrations) {
+  if (!use_csv && !use_json && show_registrations) {
     console.log("Leader key registrations ==========================================================================================================")
   }
   for (let row of result) {
@@ -891,13 +896,13 @@ function process_burnchain_ops() {
       op.LeaderBlockCommit.btc_address = c32.c32ToB58(op.LeaderBlockCommit.stacks_address)
     } else if (op.LeaderKeyRegister) {
       op.LeaderKeyRegister.stacks_address = c32.c32address(op.LeaderKeyRegister.address.version, op.LeaderKeyRegister.address.bytes)
-      if (!use_csv && show_registrations && op.LeaderKeyRegister.block_height >= start_block && op.LeaderKeyRegister.block_height < end_block) {
+      if (!use_csv && !use_json && show_registrations && op.LeaderKeyRegister.block_height >= start_block && op.LeaderKeyRegister.block_height < end_block) {
         console.log(op.LeaderKeyRegister.block_height, op.LeaderKeyRegister.vtxindex, op.LeaderKeyRegister.stacks_address, )
       }
     }
     burnchain_ops_by_burn_hash[row.block_hash].push(op)
   }
-  !use_csv && console.log("Blocks ============================================================================================================================")
+  !use_csv && !use_json  && console.log("Blocks ============================================================================================================================")
 }
 
 
@@ -978,7 +983,7 @@ function process_burnchain_ops() {
 
     
     // console.log("current_winner_block", current_winner_block)
-    !use_csv && console.log(
+    !use_csv && !use_json  && console.log(
       block.block_height,
       current_winner_block ? block_parent_distance : '?',
       current_winner_block && current_winner_block.parent_block_ptr ? current_winner_block.parent_block_ptr : '',
@@ -987,6 +992,7 @@ function process_burnchain_ops() {
       block.payments.length ? `${block.payments[0].stacks_block_height}${at_tip}` : '',
       block.payments.length ? `${numberWithCommas(parseInt(block.payments[0].coinbase) / 1000000, 2)}` : '',
       numberWithCommas(block.actual_burn, 0),
+      block.payments.length ? `${numberWithCommas((block_burn + block.block_commits.length * 80000) / (parseInt(block.payments[0].coinbase) / 1000000) , 0)}` : '',
       block.branch_info ? `${fixedBranchName(block.branch_info.name)}` : ' ',
       // block.branch_info ? block.branch_info.height_created : '-',
       block.block_headers.length ? `s:${block.block_headers[0].block_hash.substring(0, 10)}` : '-',
@@ -1007,6 +1013,8 @@ function process_burnchain_ops() {
     parent_hash = block.block_headers.length ? block.block_headers[0].block_hash : null
   }
 
+  const orphaned_stacks_blocks = blocks - empty_blocks - actual_win_total - incorrect_blocks;
+
   if (use_csv) {
     // display CSV output
     console.log("STX address,BTC address,actual wins,total wins,total mined,%actual wins,%won,paid satoshis,theoritical win%,avg paid,last paid,rewards")
@@ -1016,6 +1024,20 @@ function process_burnchain_ops() {
       miner.average_burn = miner.burned / miner.mined
       miner.normalized_wins = miner.won / miner.average_burn
     }
+  } else if (use_json) {
+    const stacksDump = {
+      last_block,
+      miners_last_block: miner_count_last_block,
+      miners_total: Object.keys(miners).length,
+      total_commit_last_block: burn_last_block,
+      block_reward_last_block: reward_last_block,
+      btc_blocks: blocks,
+      btc_blocks_empty: empty_blocks,
+      actual_win_total: actual_win_total,
+      orphaned_stacks_blocks: orphaned_stacks_blocks,
+      incorrect_stacks_blocks: incorrect_blocks,
+    }
+    console.log(JSON.stringify(stacksDump))
   } else {
     // display console output
 
@@ -1060,7 +1082,7 @@ function process_burnchain_ops() {
     console.log("btc blocks:", blocks)
     console.log("empty btc blocks:", empty_blocks)
     console.log("actual_win_total:", actual_win_total)
-    console.log("orphaned blocks:", blocks - empty_blocks - actual_win_total - incorrect_blocks)
+    console.log("orphaned blocks:", orphaned_stacks_blocks)
     console.log("incorrect blocks:", incorrect_blocks)
     if (use_txs) {
       console.log("total transactions (excl coinbase)", transaction_count)
