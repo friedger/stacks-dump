@@ -165,9 +165,7 @@ function toIPV4(addr) {
 function decompressPubKey(key) {
   const uncompressed_hex = bitcoin.ECPair.fromPublicKey(
     Buffer.from(key, "hex"),
-    {
-      compressed: false,
-    }
+    { compressed: false }
   ).publicKey.toString("hex")
   return uncompressed_hex
 }
@@ -455,15 +453,18 @@ const root = ""
 // const use_txs = process.argv[2] === '-t'
 
 let target = "mainnet"
-let use_txs = false
+let use_alpha = false
 let use_csv = false
 let use_json = false
-let use_alpha = false
+let use_txs = false
+let show_all_miners = false
+let show_blocks = true
+let show_distances = false
+let show_logo = true
 let show_nodes = false
 let show_paths = false
-let show_logo = true
-let show_distances = false
 let show_registrations = false
+let show_totals = true
 let start_block = 0
 let end_block = 2000000000 // probably high enough
 let data_root_path = ""
@@ -481,9 +482,13 @@ for (let j = 0; j < my_args.length; j++) {
       use_alpha = true
       break
     case "-b":
+    case "--no-blocks":
+      show_blocks = false
+      break
     case "-bitcoin":
       j++
       sats_stx = parseInt(my_args[j])
+      break
     case "-c":
     case "--csv":
       use_csv = true
@@ -508,6 +513,10 @@ for (let j = 0; j < my_args.length; j++) {
     case "-e":
       j++
       end_block = parseInt(my_args[j])
+      break
+    case "-g":
+    case "--no-totals":
+      show_totals = false
       break
     case "-k":
     case "--krypton":
@@ -537,6 +546,9 @@ for (let j = 0; j < my_args.length; j++) {
     case "--start-block":
       j++
       start_block = parseInt(my_args[j])
+      break
+    case "--show-all-miners":
+      show_all_miners = true
       break
     case "-r":
     case "--key-registration":
@@ -688,6 +700,7 @@ let block_commits_parent_distance_count = 0
 
 const burn_orphans = []
 const miners = {}
+const miners_with_rewards = {}
 let win_total = 0
 let actual_win_total = 0
 
@@ -904,7 +917,7 @@ function process_block_commits() {
     const block_parent_distance = row.block_height - row.parent_block_ptr
 
     const block = burn_blocks_by_height[row.block_height]
-    if (block_parent_distance < 1000) {
+    if (block_parent_distance < 1000 && block) {
       block.block_commits_distances += block_parent_distance
       block.block_commits_count++
     }
@@ -1261,7 +1274,7 @@ function process_burnchain_ops() {
         : "     -      ",
       block.block_headers.length
         ? `b:${block.block_headers[0].burn_header_hash.substring(0, 25)}`
-        : "            -              ",
+        : "            -               ",
 
       block.block_headers.length
         ? `${
@@ -1286,7 +1299,9 @@ function process_burnchain_ops() {
           (bc) =>
             `[${((parseInt(bc.burn_fee) / block_burn) * 100).toFixed(1)}]${
               bc.txid === block.winning_block_txid
-                ? chalk.green(bc.leader_key_address.substring(0, 10) + "*")
+                ? chalk[block.on_winning_fork ? "green" : "red"](
+                    bc.leader_key_address.substring(0, 10) + "*"
+                  )
                 : bc.leader_key_address.substring(0, 10) + " "
             }`
         )
@@ -1355,7 +1370,7 @@ function process_burnchain_ops() {
 
   if (true) {
     // display console output
-
+    let pending_rewards = 0
     for (let miner_key of Object.keys(miners)) {
       const miner = miners[miner_key]
       miner.average_burn = miner.burned / miner.mined
@@ -1363,6 +1378,11 @@ function process_burnchain_ops() {
       miner.average_distance = miner.distance_sum / miner.distance_count
       miner.next_average_distance =
         miner.next_block_commits_distances / miner.next_block_commits_count
+      miner.pending_reward = miner.rewards - miner.matured_rewards
+      pending_rewards += miner.pending_reward
+      if (miner.rewards > 0) {
+        miners_with_rewards[miner_key] = miner
+      }
     }
 
     if (tips.length > 1) {
@@ -1395,9 +1415,11 @@ function process_burnchain_ops() {
         "rewards",
         "matured\nrewards",
         "pending\nrewards",
+        "share of\npending \nrewards %",
         "est.\nprofit\nsats",
       ],
       colAligns: [
+        "right",
         "right",
         "right",
         "right",
@@ -1442,7 +1464,11 @@ function process_burnchain_ops() {
     for (let miner_key of sortedMinerKeys) {
       const miner = miners[miner_key]
       // console.log(`${miner_key}/${c32.c32ToB58(miner_key)} ${miner.actual_win}/${miner.won}/${miner.mined} ${(miner.actual_win / actual_win_total * 100).toFixed(2)}% ${(miner.won / miner.mined * 100).toFixed(2)}% - ${numberWithCommas(miner.burned, 0)} - Th[${(miner.burned / miner.total_burn * 100).toFixed(2)}%] (${(miner.burned / miner.mined).toFixed(0)} - ${miner.last_commit}) => ${numberWithCommas(miner.rewards / 1000000, 2)} = ${numberWithCommas(miner.matured_rewards / 1000000, 2)} + ${numberWithCommas((miner.rewards - miner.matured_rewards) / 1000000, 2)}`)
-      if (miner.mined > 0) {
+      if (
+        (miner.mined > 0 && show_all_miners) ||
+        miner.rewards > 0 ||
+        last_block - miner.last_block < 4
+      ) {
         table.push([
           `${last_block - miner.last_block < 4 ? "$" : " "}`,
           `${miner_key}`,
@@ -1453,6 +1479,7 @@ function process_burnchain_ops() {
           `${((miner.burned / miner.total_burn) * 100).toFixed(2)}%`,
           `${numberWithCommas(miner.burned, 0)}`,
           `${(miner.burned / miner.mined).toFixed(0)}`,
+          `${miner.last_commit}`,
           `${miner.last_commit}`,
           `${numberWithCommas(miner.rewards / 1000000, 2)}`,
           `${numberWithCommas(miner.matured_rewards / 1000000, 2)}`,
@@ -1500,31 +1527,6 @@ function process_burnchain_ops() {
           )
         }
       }
-    }
-    console.log(
-      "Statistics ========================================================================================================================"
-    )
-    console.log("miners (last block):", miner_count_last_block)
-    console.log(`miners (since ${start_block}):`, sortedMinerKeys.length)
-    console.log(
-      "total commit (last block):",
-      numberWithCommas(burn_last_block, 0),
-      "sats"
-    )
-    console.log(
-      "block reward (last block):",
-      numberWithCommas(reward_last_block, 2),
-      "STX"
-    )
-    console.log("btc blocks:", blocks)
-    console.log("empty btc blocks:", empty_blocks)
-    console.log("actual_win_total:", actual_win_total)
-    console.log("orphaned blocks:", orphaned_stacks_blocks)
-    console.log("incorrect blocks:", incorrect_blocks)
-    if (use_txs) {
-      console.log("total transactions (excl coinbase)", transaction_count)
-    }
-    if (show_distances) {
       console.log("block_parent_distances")
       for (let index = 0; index < block_parent_distances.length; index++) {
         const block_parent_distance = block_parent_distances[index]
@@ -1554,6 +1556,38 @@ function process_burnchain_ops() {
             ).toFixed(2)}%`
           )
         }
+      }
+    }
+    if (show_totals) {
+      console.log(
+        "Statistics ========================================================================================================================"
+      )
+      console.log("miners (last block):", miner_count_last_block)
+      console.log("miners (overall):", Object.keys(miners).length)
+      console.log(
+        "miners (won rewards):",
+        Object.keys(miners_with_rewards).length
+      )
+      console.log(
+        "total commit (last block):",
+        numberWithCommas(burn_last_block, 0),
+        "sats"
+      )
+      console.log(
+        "block reward (last block):",
+        numberWithCommas(reward_last_block, 2),
+        "STX"
+      )
+      console.log("btc blocks:", blocks)
+      console.log("empty btc blocks:", empty_blocks)
+      console.log("actual_win_total:", actual_win_total)
+      console.log(
+        "orphaned blocks:",
+        blocks - empty_blocks - actual_win_total - incorrect_blocks
+      )
+      console.log("incorrect blocks:", incorrect_blocks)
+      if (use_txs) {
+        console.log("total transactions (excl coinbase)", transaction_count)
       }
     }
   }
