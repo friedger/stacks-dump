@@ -5,6 +5,12 @@
     "./src": "./src/index.js",
     "./src/*": "./src/*.js"
   },
+  "prettier": {
+    "trailingComma": "es5",
+    "tabWidth": 2,
+    "semi": false,
+    "singleQuote": false
+  },
   "dependencies": {
     "@blockstack/stacks-transactions": "^0.7.0",
     "@stacks/blockchain-api-client": "^0.19.0",
