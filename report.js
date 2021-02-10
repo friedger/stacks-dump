@@ -471,6 +471,7 @@ let data_root_path = ""
 let sats_stx = 1000
 let csvFile = "stacks-dump.csv"
 let jsonFile = "stacks-dump.json"
+let blocksFile = "stacks-dump-blocks.txt"
 const my_args = process.argv.slice(2)
 
 // iterate through included options
@@ -484,6 +485,10 @@ for (let j = 0; j < my_args.length; j++) {
     case "-b":
     case "--no-blocks":
       show_blocks = false
+      break
+    case "--blocks-file":
+      j++
+      blocksFile = my_args[j]
       break
     case "-bitcoin":
       j++
@@ -569,11 +574,13 @@ for (let j = 0; j < my_args.length; j++) {
   }
 }
 
-var jsonStream = use_json
+let jsonStream = use_json
   ? fs.createWriteStream(jsonFile, { flags: "w" })
   : null
-var csvStream = use_csv ? fs.createWriteStream(csvFile, { flags: "w" }) : null
-
+let csvStream = use_csv ? fs.createWriteStream(csvFile, { flags: "w" }) : null
+let blocksStream = show_blocks
+  ? fs.createWriteStream(blocksFile, { flags: "w" })
+  : null
 const peer_db_path = `peer_db.sqlite`
 const burnchain_db_path = `burnchain/db/bitcoin/${
   target === "mainnet"
@@ -1130,9 +1137,6 @@ function process_burnchain_ops() {
     }
     burnchain_ops_by_burn_hash[row.block_hash].push(op)
   }
-  console.log(
-    "Blocks ============================================================================================================================"
-  )
 }
 
 ;(async () => {
@@ -1231,82 +1235,89 @@ function process_burnchain_ops() {
     })
 
     // console.log("current_winner_block", current_winner_block)
-    console.log(
-      block.block_height,
-      current_winner_block ? block_parent_distance : "?",
-      current_winner_block && current_winner_block.parent_block_ptr
-        ? current_winner_block.parent_block_ptr
-        : "   -  ",
+    if (show_blocks) {
+      blocksStream.write(
+        [
+          block.block_height,
+          current_winner_block ? block_parent_distance : "?",
+          current_winner_block && current_winner_block.parent_block_ptr
+            ? current_winner_block.parent_block_ptr
+            : "   -  ",
 
-      // block.block_headers.length ? `${block.block_headers[0].block_height}` : '-',
-      block.payments.length
-        ? `${block.payments[0].stacks_block_height}${at_tip}`
-        : "     ",
-      block.payments.length
-        ? `${numberWithCommas(
-            parseInt(block.payments[0].coinbase) / 1000000,
-            2
-          )}`
-        : "   -    ",
-      block.actual_burn !== 0
-        ? numberWithCommas(block.actual_burn, 0)
-        : "    -    ",
-      block.payments.length
-        ? `${numberWithCommas(
-            (block.actual_burn + block.block_commits.length * 50000) /
-              (parseInt(block.payments[0].coinbase) / 1000000),
-            0
-          )}`
-        : "     ",
-      block.branch_info ? `${fixedBranchName(block.branch_info.name)}` : "    ",
-      // block.branch_info ? block.branch_info.height_created : '-',
-      block.block_headers.length
-        ? `s:${block.block_headers[0].block_hash.substring(0, 10)}`
-        : "     -      ",
-      block.block_headers.length
-        ? `p:${block.block_headers[0].parent_block.substring(0, 10)}`
-        : "     -      ",
-      block.block_headers.length
-        ? `c:${block.block_headers[0].consensus_hash.substring(0, 10)}`
-        : "     -      ",
-      stacks_block_id !== "-"
-        ? `i:${stacks_block_id.substring(0, 10)}`
-        : "     -      ",
-      block.block_headers.length
-        ? `b:${block.block_headers[0].burn_header_hash.substring(0, 25)}`
-        : "            -               ",
+          // block.block_headers.length ? `${block.block_headers[0].block_height}` : '-',
+          block.payments.length
+            ? `${block.payments[0].stacks_block_height}${at_tip}`
+            : "     ",
+          block.payments.length
+            ? `${numberWithCommas(
+                parseInt(block.payments[0].coinbase) / 1000000,
+                2
+              )}`
+            : "   -    ",
+          block.actual_burn !== 0
+            ? numberWithCommas(block.actual_burn, 0)
+            : "    -    ",
+          block.payments.length
+            ? `${numberWithCommas(
+                (block.actual_burn + block.block_commits.length * 50000) /
+                  (parseInt(block.payments[0].coinbase) / 1000000),
+                0
+              )}`
+            : "     ",
+          block.branch_info
+            ? `${fixedBranchName(block.branch_info.name)}`
+            : "    ",
+          // block.branch_info ? block.branch_info.height_created : '-',
+          block.block_headers.length
+            ? `s:${block.block_headers[0].block_hash.substring(0, 10)}`
+            : "     -      ",
+          block.block_headers.length
+            ? `p:${block.block_headers[0].parent_block.substring(0, 10)}`
+            : "     -      ",
+          block.block_headers.length
+            ? `c:${block.block_headers[0].consensus_hash.substring(0, 10)}`
+            : "     -      ",
+          stacks_block_id !== "-"
+            ? `i:${stacks_block_id.substring(0, 10)}`
+            : "     -      ",
+          block.block_headers.length
+            ? `b:${block.block_headers[0].burn_header_hash.substring(0, 25)}`
+            : "            -               ",
 
-      block.block_headers.length
-        ? `${
-            block.block_headers[0].parent_block === parent_hash
-              ? (parent_winner_block
-                  ? parent_winner_block.leader_key_address
-                  : null) ===
-                (current_winner_block
-                  ? current_winner_block.leader_key_address
-                  : null)
-                ? "@+"
-                : "@@"
-              : "  "
-          }`
-        : "  ",
-      txids,
-      block.block_commits
-        .sort((a, b) =>
-          a.leader_key_address.localeCompare(b.leader_key_address)
-        )
-        .map(
-          (bc) =>
-            `[${((parseInt(bc.burn_fee) / block_burn) * 100).toFixed(1)}]${
-              bc.txid === block.winning_block_txid
-                ? chalk[block.on_winning_fork ? "green" : "red"](
-                    bc.leader_key_address.substring(0, 10) + "*"
-                  )
-                : bc.leader_key_address.substring(0, 10) + " "
-            }`
-        )
-        .join("")
-    )
+          block.block_headers.length
+            ? `${
+                block.block_headers[0].parent_block === parent_hash
+                  ? (parent_winner_block
+                      ? parent_winner_block.leader_key_address
+                      : null) ===
+                    (current_winner_block
+                      ? current_winner_block.leader_key_address
+                      : null)
+                    ? "@+"
+                    : "@@"
+                  : "  "
+              }`
+            : "  ",
+          txids,
+          block.block_commits
+            .sort((a, b) =>
+              a.leader_key_address.localeCompare(b.leader_key_address)
+            )
+            .map(
+              (bc) =>
+                `[${((parseInt(bc.burn_fee) / block_burn) * 100).toFixed(1)}]${
+                  bc.txid === block.winning_block_txid
+                    ? chalk[block.on_winning_fork ? "green" : "red"](
+                        bc.leader_key_address.substring(0, 10) + "*"
+                      )
+                    : bc.leader_key_address.substring(0, 10) + " "
+                }`
+            )
+            .join(""),
+          "\n",
+        ].join(" ")
+      )
+    }
     // console.log(block.payments)
     miner_count_last_block = block.block_commits.length
     burn_last_block = block.actual_burn // block.payments.length ? block.payments[0].burnchain_sortition_burn : 0
