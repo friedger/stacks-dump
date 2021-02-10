@@ -1,4 +1,5 @@
 {
+  "prettier": "@stacks/prettier-config",
   "type": "module",
   "exports": {
     ".": "./lib/index.js",
@@ -6,8 +7,7 @@
     "./src/*": "./src/*.js"
   },
   "dependencies": {
-    "@blockstack/stacks-transactions": "^0.7.0",
-    "@stacks/blockchain-api-client": "^0.19.0",
+    "@stacks/transactions": "^1.1.1-alpha.0",
     "b58": "^4.0.3",
     "better-sqlite3": "^7.1.0",
     "bitbox-sdk": "^8.11.2",
@@ -18,5 +18,8 @@
     "node-fetch": "^2.6.1",
     "wif": "^2.0.6",
     "ws": "^7.3.1"
+  },
+  "devDependencies": {
+    "@stacks/prettier-config": "^0.0.7"
   }
 }
