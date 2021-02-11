@@ -469,6 +469,7 @@ let start_block = 0
 let end_block = 2000000000 // probably high enough
 let data_root_path = ""
 let sats_stx = 1000
+let avg_tx_costs = 50000
 let csvFile = "stacks-dump.csv"
 let jsonFile = "stacks-dump.json"
 let blocksFile = "stacks-dump-blocks.txt"
@@ -486,13 +487,20 @@ for (let j = 0; j < my_args.length; j++) {
     case "--no-blocks":
       show_blocks = false
       break
+    case "-f":
     case "--blocks-file":
       j++
       blocksFile = my_args[j]
       break
-    case "-bitcoin":
+    case "-q":
+    case "--stats-stx":
       j++
       sats_stx = parseInt(my_args[j])
+      break
+    case "-z":
+    case "--tx-costs":
+      j++
+      avg_tx_costs = parseInt(my_args[j])
       break
     case "-c":
     case "--csv":
@@ -566,6 +574,9 @@ for (let j = 0; j < my_args.length; j++) {
     case "-x":
     case "--xenon":
       target = "xenon"
+      break
+    case "-":
+      // skip
       break
     default:
       // assuming last argument is root path
@@ -1259,7 +1270,8 @@ function process_burnchain_ops() {
             : "    -    ",
           block.payments.length
             ? `${numberWithCommas(
-                (block.actual_burn + block.block_commits.length * 50000) /
+                (block.actual_burn +
+                  block.block_commits.length * avg_tx_costs) /
                   (parseInt(block.payments[0].coinbase) / 1000000),
                 0
               )}`
@@ -1333,6 +1345,17 @@ function process_burnchain_ops() {
   const orphaned_stacks_blocks =
     blocks - empty_blocks - actual_win_total - incorrect_blocks
 
+  let sorted_miner_keys
+  if (use_alpha) {
+    sorted_miner_keys = Object.keys(miners)
+      .filter((miner) => miners[miner].mined > 0)
+      .sort()
+  } else {
+    sorted_miner_keys = Object.keys(miners)
+      .filter((miner) => miners[miner].mined > 0)
+      .sort((a, b) => miners[b].last_commit - miners[a].last_commit)
+  }
+
   if (use_csv) {
     // write CSV output
     csvStream.write(
@@ -1366,7 +1389,9 @@ function process_burnchain_ops() {
     // write json
     const stacksDump = {
       last_block,
+      start_block,
       miners_last_block: miner_count_last_block,
+      miners_start: sorted_miner_keys.length,
       miners_total: Object.keys(miners).length,
       total_commit_last_block: burn_last_block,
       block_reward_last_block: reward_last_block,
@@ -1375,6 +1400,8 @@ function process_burnchain_ops() {
       actual_win_total: actual_win_total,
       orphaned_stacks_blocks: orphaned_stacks_blocks,
       incorrect_stacks_blocks: incorrect_blocks,
+      sats_stx,
+      avg_tx_costs,
     }
     jsonStream.write(JSON.stringify(stacksDump))
   }
@@ -1428,8 +1455,10 @@ function process_burnchain_ops() {
         "pending\nrewards",
         "share of\npending \nrewards %",
         "est.\nprofit\nsats",
+        "est.\nprice",
       ],
       colAligns: [
+        "right",
         "right",
         "right",
         "right",
@@ -1462,17 +1491,8 @@ function process_burnchain_ops() {
       //   20,
       // ],
     })
-    let sortedMinerKeys
-    if (use_alpha) {
-      sortedMinerKeys = Object.keys(miners)
-        .filter((miner) => miners[miner].mined > 0)
-        .sort()
-    } else {
-      sortedMinerKeys = Object.keys(miners)
-        .filter((miner) => miners[miner].mined > 0)
-        .sort((a, b) => miners[b].last_commit - miners[a].last_commit)
-    }
-    for (let miner_key of sortedMinerKeys) {
+
+    for (let miner_key of sorted_miner_keys) {
       const miner = miners[miner_key]
       // console.log(`${miner_key}/${c32.c32ToB58(miner_key)} ${miner.actual_win}/${miner.won}/${miner.mined} ${(miner.actual_win / actual_win_total * 100).toFixed(2)}% ${(miner.won / miner.mined * 100).toFixed(2)}% - ${numberWithCommas(miner.burned, 0)} - Th[${(miner.burned / miner.total_burn * 100).toFixed(2)}%] (${(miner.burned / miner.mined).toFixed(0)} - ${miner.last_commit}) => ${numberWithCommas(miner.rewards / 1000000, 2)} = ${numberWithCommas(miner.matured_rewards / 1000000, 2)} + ${numberWithCommas((miner.rewards - miner.matured_rewards) / 1000000, 2)}`)
       if (
@@ -1491,18 +1511,30 @@ function process_burnchain_ops() {
           `${numberWithCommas(miner.burned, 0)}`,
           `${(miner.burned / miner.mined).toFixed(0)}`,
           `${miner.last_commit}`,
-          `${miner.last_commit}`,
-          `${numberWithCommas(miner.rewards / 1000000, 2)}`,
-          `${numberWithCommas(miner.matured_rewards / 1000000, 2)}`,
-          `${numberWithCommas(
-            (miner.rewards - miner.matured_rewards) / 1000000,
-            2
-          )}`,
+          miner.rewards !== 0
+            ? `${numberWithCommas(miner.rewards / 1000000, 2)}`
+            : "",
+          miner.matured_rewards !== 0
+            ? `${numberWithCommas(miner.matured_rewards / 1000000, 2)}`
+            : "",
+          miner.pending_reward !== 0
+            ? `${numberWithCommas(miner.pending_reward / 1000000, 2)}`
+            : "",
+          miner.pending_reward !== 0
+            ? ((miner.pending_reward / pending_rewards) * 100).toFixed(2)
+            : "",
           `${numberWithCommas(
             (miner.rewards * sats_stx) / 1000000 -
-              (miner.burned + miner.mined * 50000),
+              (miner.burned + miner.mined * avg_tx_costs),
             0
           )}`,
+          miner.rewards !== 0
+            ? `${numberWithCommas(
+                (miner.burned + miner.mined * avg_tx_costs) /
+                  (miner.rewards / 1000000),
+                0
+              )}`
+            : "",
         ])
       }
     }
@@ -1574,6 +1606,9 @@ function process_burnchain_ops() {
         "Statistics ========================================================================================================================"
       )
       console.log("miners (last block):", miner_count_last_block)
+      if (start_block > 0) {
+        console.log(`miners (since ${start_block}):`, sorted_miner_keys.length)
+      }
       console.log("miners (overall):", Object.keys(miners).length)
       console.log(
         "miners (won rewards):",
@@ -1589,17 +1624,19 @@ function process_burnchain_ops() {
         numberWithCommas(reward_last_block, 2),
         "STX"
       )
+      if (start_block > 0) {
+        console.log(`since block ${start_block}`)
+      }
       console.log("btc blocks:", blocks)
       console.log("empty btc blocks:", empty_blocks)
       console.log("actual_win_total:", actual_win_total)
-      console.log(
-        "orphaned blocks:",
-        blocks - empty_blocks - actual_win_total - incorrect_blocks
-      )
+      console.log("orphaned blocks:", orphaned_stacks_blocks)
       console.log("incorrect blocks:", incorrect_blocks)
       if (use_txs) {
         console.log("total transactions (excl coinbase)", transaction_count)
       }
+      console.log("price sats/stx", sats_stx)
+      console.log("avg. tx costs:", avg_tx_costs)
     }
   }
 })()
