@@ -50,6 +50,7 @@ import c32 from 'c32check'
 import bitcoin from 'bitcoinjs-lib'
 import { Table } from './src/cli-tableau.js'
 import chalk from 'chalk'
+import * as fs from "fs"
 
 
 function numberWithCommas(x, decimals) {
@@ -378,7 +379,8 @@ const root = ''
 
 let target = 'mainnet'
 let use_alpha = false
-let use_csv = false
+let use_csv = true
+let use_json = true
 let use_txs = false
 let show_all_miners = false
 let show_blocks = true
@@ -398,6 +400,9 @@ let data_root_path = ''
 let block_count = 100
 let exchange = null
 let fee = null
+let csvFile = "stacks-dump.csv"
+let jsonFile = "stacks-dump.json"
+let blocksFile = "stacks-dump-blocks.txt"
 const my_args = process.argv.slice(2)
 
 // iterate through included options
@@ -415,6 +420,18 @@ for (let j = 0; j < my_args.length; j++) {
     case '-c':
     case '--csv':
       use_csv = true
+      if (!my_args[j + 1].startsWith("-")) {
+        j++
+        csvFile = my_args[j]
+      }
+      break
+    case "-j":
+    case "--json":
+      use_json = true
+      if (!my_args[j + 1].startsWith("-")) {
+        j++
+        jsonFile = my_args[j]
+      }
       break
     case '-d':
     case '--distances':
@@ -507,6 +524,13 @@ for (let j = 0; j < my_args.length; j++) {
   }
 }
 
+let jsonStream = use_json
+  ? fs.createWriteStream(jsonFile, { flags: "w" })
+  : null
+let csvStream = use_csv ? fs.createWriteStream(csvFile, { flags: "w" }) : null
+let blocksStream = show_blocks
+  ? fs.createWriteStream(blocksFile, { flags: "w" })
+  : null
 
 const prefix =
   target === "mainnet"
@@ -521,6 +545,7 @@ const burnchain_db_path = `${prefix}/burnchain/burnchain.sqlite`
 const sortition_db_path = `${prefix}/burnchain/sortition/marf.sqlite`
 const vm_db_path = `${prefix}/chainstate/vm/index.sqlite`
 const staging_db_path = `${prefix}/chainstate/vm/index.sqlite`
+
 
 if (show_logo) {
   truck()
@@ -757,7 +782,7 @@ function process_snapshots() {
 
   for (let row of result) {
     if (row.pox_valid === 0) {
-      !use_csv && show_invalid && console.log("pox invalid", row.block_height, row.burn_header_hash, parent && parent.parent_burn_header_hash)
+      show_invalid && console.log("pox invalid", row.block_height, row.burn_header_hash, parent && parent.parent_burn_header_hash)
     } else if (!parent || row.burn_header_hash === parent.parent_burn_header_hash) {
       burn_blocks_by_height[row.block_height] = row
       burn_blocks_by_burn_header_hash[row.burn_header_hash] = row
@@ -968,7 +993,7 @@ function process_burnchain_blocks() {
 function process_burnchain_ops() {
   const result = stmt_all_burnchain_ops.all()
   // console.log("process_burnchain_ops", result)
-  if (!use_csv && show_registrations) {
+  if (show_registrations) {
     console.log("Leader key registrations ==========================================================================================================")
   }
   for (let row of result) {
@@ -983,14 +1008,14 @@ function process_burnchain_ops() {
       op.LeaderBlockCommit.btc_address = c32.c32ToB58(op.LeaderBlockCommit.stacks_address)
     } else if (op.LeaderKeyRegister) {
       op.LeaderKeyRegister.stacks_address = c32.c32address(op.LeaderKeyRegister.address.version, op.LeaderKeyRegister.address.bytes)
-      if (!use_csv && show_registrations && op.LeaderKeyRegister.block_height >= start_block && op.LeaderKeyRegister.block_height < end_block) {
+      if (show_registrations && op.LeaderKeyRegister.block_height >= start_block && op.LeaderKeyRegister.block_height < end_block) {
         console.log(op.LeaderKeyRegister.block_height, op.LeaderKeyRegister.vtxindex, op.LeaderKeyRegister.stacks_address, )
       }
     }
     burnchain_ops_by_burn_hash[row.block_hash].push(op)
   }
-  if (!use_csv && show_blocks) {
-    console.log("Blocks ============================================================================================================================")
+  if (show_blocks) {
+    blocksStream.write("Blocks ============================================================================================================================")
   }
 }
 
@@ -1077,9 +1102,9 @@ function process_burnchain_ops() {
     const stacks_block_id2 = current_winner_block ? Sha512Trunc256Sum(Buffer.from(block.winning_stacks_block_hash, 'hex'), Buffer.from(block.consensus_hash, 'hex')) : '-'
     // console.log("stacks_block_id2", stacks_block_id2)
 
-    if (!use_csv && show_blocks) {
+    if (show_blocks) {
       // console.log(block)
-      console.log(
+      blocksStream.write([
         block.block_height,
         current_winner_block ? block_parent_distance : '?',
         current_winner_block && current_winner_block.parent_block_ptr ? current_winner_block.parent_block_ptr : '   -  ',
@@ -1104,7 +1129,8 @@ function process_burnchain_ops() {
         block.block_headers.length ? `${block.block_headers[0].parent_block === parent_hash ? ((parent_winner_block ? parent_winner_block.leader_key_address : null) === (current_winner_block ? current_winner_block.leader_key_address : null) ? '@+' : '@@') : '  '}` : '  ',
         txids,
         block.block_commits.sort((a, b) => (a.leader_key_address.localeCompare(b.leader_key_address))).map(bc => `[${(parseInt(bc.burn_fee) / block_burn * 100).toFixed(1)}]${bc.txid === block.winning_block_txid ? (chalk[block.on_winning_fork ? 'green': 'red'](bc.leader_key_address.substring(0, 10) + '*')) : (bc.leader_key_address.substring(0, 10) + ' ')}`).join(''),
-      )
+        "\n"
+        ].join(" "))
     }
     // console.log(block.payments)
     miner_count_last_block = block.block_commits.length
@@ -1112,6 +1138,16 @@ function process_burnchain_ops() {
     reward_last_block = block.payments.length ? parseInt(block.payments[0].coinbase) / 1000000 : 0
     parent_winner_block = current_winner_block
     parent_hash = block.block_headers.length ? block.block_headers[0].block_hash : null
+  }
+
+  const orphaned_stacks_blocks =
+    blocks - empty_blocks - actual_win_total - incorrect_blocks
+
+  let sorted_miner_keys
+  if (use_alpha) {
+    sorted_miner_keys = Object.keys(miners).filter(miner => miners[miner].mined > 0).sort()
+  } else {
+    sorted_miner_keys = Object.keys(miners).filter(miner => miners[miner].mined > 0).sort((a, b) => (miners[b].last_commit - miners[a].last_commit))
   }
 
   if (show_mining) {
@@ -1214,16 +1250,41 @@ function process_burnchain_ops() {
 
   if (use_csv) {
     // display CSV output
-    console.log("STX address,BTC address,actual wins,total wins,total mined,%actual wins,%won,paid satoshis,theoritical win%,avg paid,last paid,rewards,matured rewards")
+    csvStream.write("STX address,BTC address,actual wins,total wins,total mined,%actual wins,%won,paid satoshis,theoritical win%,avg paid,last paid,rewards,matured rewards")
     for (let miner_key of Object.keys(miners).filter(miner => miners[miner].mined > 0).sort()) {
       const miner = miners[miner_key]
       if (miner.mined > 0) {
-        console.log(`${miner_key},${c32.c32ToB58(miner_key)},${miner.actual_win},${miner.won},${miner.mined},${(miner.actual_win / actual_win_total * 100).toFixed(2)}%,${(miner.won / miner.mined * 100).toFixed(2)}%,${miner.burned},${(miner.burned / miner.total_burn * 100).toFixed(2)}%,${miner.burned / miner.mined},${miner.last_commit},${miner.rewards/1000000},${miner.matured_rewards/1000000}`)
+        csvStream.write(`${miner_key},${c32.c32ToB58(miner_key)},${miner.actual_win},${miner.won},${miner.mined},${(miner.actual_win / actual_win_total * 100).toFixed(2)}%,${(miner.won / miner.mined * 100).toFixed(2)}%,${miner.burned},${(miner.burned / miner.total_burn * 100).toFixed(2)}%,${miner.burned / miner.mined},${miner.last_commit},${miner.rewards/1000000},${miner.matured_rewards/1000000}\n`)
       }
       miner.average_burn = miner.burned / miner.mined
       miner.normalized_wins = miner.won / miner.average_burn
     }
-  } else {
+  }
+
+  if (use_json) {
+    // write json
+    const stacksDump = {
+      last_block,
+      start_block,
+      miners_last_block: miner_count_last_block,
+      miners_start: sorted_miner_keys.length,
+      miners_total: Object.keys(miners).length,
+      total_commit_last_block: burn_last_block,
+      block_reward_last_block: reward_last_block,
+      btc_blocks: blocks,
+      btc_blocks_empty: empty_blocks,
+      actual_win_total: actual_win_total,
+      orphaned_stacks_blocks: orphaned_stacks_blocks,
+      incorrect_stacks_blocks: incorrect_blocks,
+    }
+    if (fee && exchange) {
+      stacksDump.fee = fee
+      stacksDump.exchange = exchange
+    }
+    jsonStream.write(JSON.stringify(stacksDump))
+  }
+
+  if (true) {
     // display console output
     let pending_rewards = 0
     for (let miner_key of Object.keys(miners)) {
@@ -1310,12 +1371,6 @@ function process_burnchain_ops() {
       options.colAligns.push('right')
     }
     const table = new Table(options)
-    let sorted_miner_keys
-    if (use_alpha) {
-      sorted_miner_keys = Object.keys(miners).filter(miner => miners[miner].mined > 0).sort()
-    } else {
-      sorted_miner_keys = Object.keys(miners).filter(miner => miners[miner].mined > 0).sort((a, b) => (miners[b].last_commit - miners[a].last_commit))
-    }
     for (let miner_key of sorted_miner_keys) {
       const miner = miners[miner_key]
       // console.log(`${last_block - miner.last_block < 4 ? '$' : ' '} ${miner_key}/${c32.c32ToB58(miner_key)} ${adjustSpace(miner_key)} ${miner.actual_win}/${miner.won}/${miner.mined} ${(miner.actual_win / miner.mined * 100).toFixed(2)}% ${(miner.won / miner.mined * 100).toFixed(2)}% - ${numberWithCommas(miner.burned, 0)} - Th[${(miner.burned / miner.total_burn * 100).toFixed(2)}%] (${(miner.burned / miner.mined).toFixed(0)} - ${miner.last_commit}) => ${numberWithCommas(miner.rewards / 1000000, 2)} = ${numberWithCommas(miner.matured_rewards / 1000000, 2)} + ${numberWithCommas((miner.rewards - miner.matured_rewards) / 1000000, 2)}`)
@@ -1373,18 +1428,29 @@ function process_burnchain_ops() {
     }
     if (show_totals) {
       console.log("Statistics ========================================================================================================================")
+      console.log("total commit (last block):", numberWithCommas(burn_last_block, 0), "sats")
+      console.log("block reward (last block):", numberWithCommas(reward_last_block, 2), "STX")
       console.log("miners (last block):", miner_count_last_block)
       console.log("miners (overall):", Object.keys(miners).length)
+      if (start_block > 0) {
+        console.log("")
+        console.log(`since block ${start_block}`)
+        console.log(`miners:`, sorted_miner_keys.length)
+      }
       console.log("miners (won rewards):", Object.keys(miners_with_rewards).length)
       console.log("total commit (last block):", numberWithCommas(burn_last_block, 0), "sats")
       console.log("block reward (last block):", numberWithCommas(reward_last_block, 2), "STX")
       console.log("btc blocks:", blocks)
       console.log("empty btc blocks:", empty_blocks)
       console.log("actual_win_total:", actual_win_total)
-      console.log("orphaned blocks:", blocks - empty_blocks - actual_win_total - incorrect_blocks)
+      console.log("orphaned blocks:", orphaned_stacks_blocks)
       console.log("incorrect blocks:", incorrect_blocks)
       if (use_txs) {
         console.log("total transactions (excl coinbase)", transaction_count)
+      }
+      if (fee && exchange) {
+        console.log("price sats/stx", exchange)
+        console.log("avg. tx costs:", fee)
       }
     }
   }
